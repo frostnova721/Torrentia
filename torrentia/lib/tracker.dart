@@ -4,7 +4,8 @@ import 'package:torrentia/network/requesters.dart';
 
 class Tracker {
   Future<dynamic> getPeers() async {
-    final content = await Reader().readFromFile("assets/torrent.torrent");
+    final content = await Reader().readFromFile("assets/big-buck-bunny.torrent");
+    print(content);
     final res = await sendAnnounceRequest(content);
     print(res.peers[0].ip);
     download(res.peers[0], content, []);

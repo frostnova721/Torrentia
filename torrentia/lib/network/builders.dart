@@ -8,16 +8,15 @@ Uint8List buildConnReq() {
   final buffer = Uint8List(16);
   final byteView = ByteData.sublistView(buffer);
 
-  //conn id
-  byteView.setUint32(0, 0x417);
-  byteView.setUint32(4, 0x27101980);
+  // Correctly set 64-bit connection ID
+  byteView.setUint64(0, 0x41727101980, Endian.big);
 
-  byteView.setUint32(8, 0);
+  // Action (0 = Connect)
+  byteView.setUint32(8, 0, Endian.big);
 
+  // Generate a random transaction ID (4 bytes)
   final random = Random.secure();
-  for (int i = 12; i < 16; i++) {
-    buffer[i] = random.nextInt(256);
-  }
+  byteView.setUint32(12, random.nextInt(1 << 32), Endian.big);
 
   return buffer;
 }
