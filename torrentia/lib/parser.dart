@@ -1,3 +1,4 @@
+// ignore_for_file: public_member_api_docs, sort_constructors_first
 import 'dart:typed_data';
 
 import 'package:b_encode_decode/b_encode_decode.dart';
@@ -56,7 +57,9 @@ List<Peer> _parsePeers(Uint8List peersData) {
 
     // Proper IP address formatting
     final ip = ipBytes.map((b) => b.toString()).join('.');
-    final port = ((portBytes[0] & 0xFF) << 8) | (portBytes[1] & 0xFF);
+    final portRaw1 = portBytes[0];
+    final portRaw2 = portBytes[1];
+    final port = ((portRaw1 & 0xFF) << 8) | (portRaw2 & 0xFF);
 
     peers.add(Peer(ip: ip, port: port));
   }
@@ -65,7 +68,8 @@ List<Peer> _parsePeers(Uint8List peersData) {
 
 ConnectionResponse parseConnResponse(Uint8List response) {
   if (response.length < 16) {
-    throw Exception("Expected Length Of 16 Bytes. Recieved ${response.length} Bytes");
+    throw Exception(
+        "Expected Length Of 16 Bytes. Recieved ${response.length} Bytes");
   }
 
   final bytes = ByteData.sublistView(response);
@@ -102,6 +106,9 @@ class Peer {
   final int port;
 
   Peer({required this.ip, required this.port});
+
+  @override
+  String toString() => 'Peer(ip: $ip, port: $port)';
 }
 
 class ConnectionResponse {

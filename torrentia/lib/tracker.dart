@@ -7,7 +7,7 @@ class Tracker {
     final content = await Reader().readFromFile("assets/big-buck-bunny.torrent");
     print(content);
     final res = await sendAnnounceRequest(content);
-    print(res.peers[0].ip);
+    print(res.peers);
     download(res.peers[0], content, []);
   }
 

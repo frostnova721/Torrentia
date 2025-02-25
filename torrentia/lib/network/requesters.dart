@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -43,68 +44,41 @@ Future<dynamic> sendHttpRequest(Uri uri, TorrentContent torrent) async {
 Future<dynamic> sendUdpRequest(Uri uri, TorrentContent content) async {
   final reqData = buildConnReq();
 
-  final s = await RawDatagramSocket.bind(InternetAddress.anyIPv4, 0);
+  const localPort = 6771;
+
+  final s = await RawDatagramSocket.bind(InternetAddress.anyIPv4, localPort);
   s.broadcastEnabled = true;
 
-  final Map<int, Uri> transactionMap = {};
+  final iadr = await InternetAddress.lookup(uri.host);
+  print(iadr);
+  print(content.infoHash.map((b) => b.toRadixString(16).padLeft(2, '0')).join(''));
+  if (iadr.isEmpty) {
+    print("Address lookup failed.");
+  }
 
+  final sender = s.send(reqData,
+      iadr.firstWhere((it) => it.type == InternetAddressType.IPv4), uri.port);
+  print("Sent bytes: $sender");
+
+  Completer<Uint8List?> completer = Completer();
   s.listen((RawSocketEvent event) {
+    print(event);
     if (event == RawSocketEvent.read) {
       final res = s.receive();
       print(res);
       if (res != null) {
-        final parsedResponse = parseConnResponse(res.data);
-        print("Received response: $parsedResponse");
-
-        // Optional: Match response with sent transaction
-        final transactionId =
-            parsedResponse.transactionId; // Extract from response
-        if (transactionMap.containsKey(transactionId)) {
-          print("Matched response from ${transactionMap[transactionId]}");
-          transactionMap.remove(transactionId);
-        }
+        completer.complete(res.data);
+        s.close();
       }
     }
   });
+  await completer.future.timeout(Duration(seconds: 15), onTimeout: () async {
+    s.close();
+    print("Connection timed out.");
+    return null;
+  });
+  // s.close();
 
-  for (final url in content.announceList) {
-    try {
-      final uri = Uri.parse(url);
-      if (uri.scheme != "udp") continue;
-      print(url);
-      final iadr = await InternetAddress.lookup(uri.host);
-      if (iadr.isEmpty) {
-        print("Address lookup failed.");
-        continue;
-      }
-
-      final transactionId =
-          extractTransactionId(reqData); // Extract from request data
-      transactionMap[transactionId] = uri;
-
-      final sender = s.send(reqData, iadr.first, uri.port);
-      print(sender);
-
-      await Future.delayed(Duration(milliseconds: 500));
-      // if (event == RawSocketEvent.read) {
-      // final res = s.receive();
-      // if (res != null) {
-      //   final parsedResponse = parseConnResponse(res.data);
-      //   print("Received response: $parsedResponse");
-      // }
-      // }
-    } catch (err) {
-      print("Failed to establish connection with $url");
-      print(err);
-    }
-    await Future.delayed(Duration(seconds: 5));
-    // s.close();
-  }
   // final res = sender.send(reqData, Endpoint.any(port: 65001));
   // final announceReq = buildAnnounceRequest(torrent: content, connId: rdbv.get);
-}
-
-int extractTransactionId(Uint8List data) {
-  final byteView = ByteData.sublistView(data);
-  return byteView.getUint32(12, Endian.big); // Extracts the last 4 bytes
 }

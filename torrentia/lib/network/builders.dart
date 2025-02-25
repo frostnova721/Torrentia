@@ -9,7 +9,8 @@ Uint8List buildConnReq() {
   final byteView = ByteData.sublistView(buffer);
 
   // Correctly set 64-bit connection ID
-  byteView.setUint64(0, 0x41727101980, Endian.big);
+  byteView.setUint32(0, 0x41727101, Endian.big);
+  byteView.setUint32(4, 0x980, Endian.big);
 
   // Action (0 = Connect)
   byteView.setUint32(8, 0, Endian.big);

@@ -21,14 +21,14 @@ class Reader {
 
     final List<TorrentInfoFile> fileList = [];
 
-    files.forEach((it) {
+    for (var it in files) {
       final List<dynamic> path = it['path'];
       final length = it['length'];
 
       final file = (utf8.decode(path[0]));
 
       fileList.add(TorrentInfoFile(size: length, path: file));
-    });
+    }
 
 // bencoded stuff contains (! means parsed):
 // - announce !
@@ -54,7 +54,7 @@ class Reader {
     annlist.forEach((it) => announceList.add(utf8.decode(it[0])));
 
     final List<String> urlList = [];
-    bencoded['url-list'].forEach((it) => urlList.add(utf8.decode(it)));
+    bencoded['url-list']?.forEach((it) => urlList.add(utf8.decode(it)));
 
     final int pieceLength = info['piece length'];
 

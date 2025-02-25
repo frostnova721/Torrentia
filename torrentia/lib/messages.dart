@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:torrentia/reader.dart';
@@ -5,24 +6,14 @@ import 'package:torrentia/utils.dart';
 
 class Messages {
   static Uint8List buildHandShake(TorrentContent torrent) {
-    final buffer = Uint8List(68);
-    final byteView = ByteData.sublistView(buffer);
+    final handshake = BytesBuilder();
+  handshake.addByte(19); // Protocol length
+  handshake.add(utf8.encode("BitTorrent protocol"));
+  handshake.add(Uint8List(8)); // Reserved bytes
+  handshake.add(torrent.infoHash);
+  handshake.add(TorrentiaUtils.generateId());
 
-    byteView.setUint8(0, 19); //pstrlen
-    final stringBytes = Uint8List.fromList("BitTorrent protocol".codeUnits);
-
-    buffer.setRange(1, 1 + stringBytes.length, stringBytes); //pstr
-
-    //reserved
-    byteView.setUint32(20, 0);
-    byteView.setUint32(24, 0);
-
-    buffer.setRange(28, 28 + torrent.infoHash.length, torrent.infoHash);
-
-    final id = TorrentiaUtils.generateId();
-    buffer.setRange(28 + torrent.infoHash.length, 28 + torrent.infoHash.length + id.length, id);
-
-    return buffer;
+  return handshake.toBytes();
   }
 
   static Uint8List buildUnchoke() {

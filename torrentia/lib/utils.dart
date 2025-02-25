@@ -2,8 +2,10 @@ import 'dart:math';
 import 'dart:typed_data';
 
 class TorrentiaUtils {
+  /// The peer id
   static Uint8List? id;
 
+  /// Generate peer id
   static Uint8List generateId() {
     if (id != null) {
       return id!;
