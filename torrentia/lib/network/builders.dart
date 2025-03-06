@@ -9,8 +9,8 @@ Uint8List buildConnReq() {
   final byteView = ByteData.sublistView(buffer);
 
   // Correctly set 64-bit connection ID
-  byteView.setUint32(0, 0x41727101, Endian.big);
-  byteView.setUint32(4, 0x980, Endian.big);
+  byteView.setUint32(0, 0x00000417, Endian.big);
+  byteView.setUint32(4, 0x27101980, Endian.big);
 
   // Action (0 = Connect)
   byteView.setUint32(8, 0, Endian.big);
@@ -23,14 +23,16 @@ Uint8List buildConnReq() {
 }
 
 Uint8List buildAnnounceRequest({
-  required Uint8List connId,
+  required int connId,
   required TorrentContent torrent,
   int port = 6881,
 }) {
+  port = port > 0 ? port : 6881;
+
   final buffer = Uint8List(98);
   final byteView = ByteData.sublistView(buffer);
 
-  buffer.setRange(0, 8, connId);
+  byteView.setUint64(0, connId, Endian.big);
   byteView.setUint32(8, 1); //action
 
   final rand = Random.secure();
@@ -45,7 +47,7 @@ Uint8List buildAnnounceRequest({
 
   buffer.setRange(56, 64, Uint16List(8)); //downloaded
 
-  byteView.setUint32(64,torrent.size); //left
+  byteView.setUint32(64, torrent.size); //left
 
   buffer.setRange(72, 80, Uint8List(8)); //uploaded
 

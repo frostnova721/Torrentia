@@ -68,15 +68,14 @@ List<Peer> _parsePeers(Uint8List peersData) {
 
 ConnectionResponse parseConnResponse(Uint8List response) {
   if (response.length < 16) {
-    throw Exception(
-        "Expected Length Of 16 Bytes. Recieved ${response.length} Bytes");
+    throw Exception("Expected Length Of 16 Bytes. Recieved ${response.length} Bytes");
   }
 
   final bytes = ByteData.sublistView(response);
   return ConnectionResponse(
     action: bytes.getUint32(0),
     transactionId: bytes.getUint32(4),
-    connectionId: response.sublist(8),
+    connectionId: bytes.getUint64(8, Endian.big),
   );
 }
 
@@ -114,7 +113,7 @@ class Peer {
 class ConnectionResponse {
   final int action;
   final int transactionId;
-  final dynamic connectionId;
+  final int connectionId;
 
   ConnectionResponse({
     required this.action,
