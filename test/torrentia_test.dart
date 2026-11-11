@@ -78,7 +78,7 @@ void main() {
 
   group('Reader', () {
     test('parses the Big Buck Bunny torrent with the known info hash', () async {
-      final t = await Reader().readFromFile('assets/bbt.torrent');
+      final t = await Reader().readFromFile('assets/big-buck-bunny.torrent');
       expect(t.infoHashHex, 'dd8255ecdc7ca55fb0bbf81323d87062db1f6d1c');
       expect(t.info.files.map((f) => f.path), contains('Big Buck Bunny/Big Buck Bunny.mp4'));
       expect(t.urlList, ['https://webtorrent.io/torrents/']);
