@@ -1,14 +1,12 @@
 name: torrentia
-description: A sample command-line application.
+description: A BitTorrent client that streams video over HTTP while it downloads.
 version: 1.0.0
 # repository: https://github.com/my_org/my_repo
 
 environment:
   sdk: ^3.6.0
 
-# Add regular dependencies here.
 dependencies:
-  b_encode_decode: ^1.0.4
   http: ^1.2.2
   crypto: ^3.0.6
 

@@ -4,112 +4,119 @@ import 'dart:typed_data';
 import 'package:torrentia/reader.dart';
 import 'package:torrentia/utils.dart';
 
-Uint8List buildConnReq() {
+/// Magic protocol id that starts every UDP connect request (BEP 15).
+const int udpProtocolId = 0x41727101980;
+
+final _random = Random.secure();
+
+int randomTransactionId() => _random.nextInt(1 << 32);
+
+enum AnnounceEvent {
+  none(0, null),
+  completed(1, 'completed'),
+  started(2, 'started'),
+  stopped(3, 'stopped');
+
+  final int udpCode;
+  final String? httpName;
+  const AnnounceEvent(this.udpCode, this.httpName);
+}
+
+/// Transfer stats reported to the tracker.
+class AnnounceParams {
+  final int downloaded;
+  final int uploaded;
+  final int left;
+  final AnnounceEvent event;
+  final int port;
+  final int numWant;
+
+  /// Our peer id; defaults to the process-wide id.
+  final Uint8List? peerId;
+
+  const AnnounceParams({
+    required this.downloaded,
+    required this.uploaded,
+    required this.left,
+    this.event = AnnounceEvent.none,
+    this.port = 6881,
+    this.numWant = 80,
+    this.peerId,
+  });
+
+  Uint8List get effectivePeerId => peerId ?? TorrentiaUtils.generateId();
+
+  AnnounceParams withEvent(AnnounceEvent e) => AnnounceParams(
+        downloaded: downloaded,
+        uploaded: uploaded,
+        left: left,
+        event: e,
+        port: port,
+        numWant: numWant,
+        peerId: peerId,
+      );
+}
+
+/// UDP connect request: protocol_id(8) action=0(4) transaction_id(4)
+Uint8List buildConnReq(int transactionId) {
   final buffer = Uint8List(16);
-  final byteView = ByteData.sublistView(buffer);
-
-  // Correctly set 64-bit connection ID
-  byteView.setUint32(0, 0x00000417, Endian.big);
-  byteView.setUint32(4, 0x27101980, Endian.big);
-
-  // Action (0 = Connect)
-  byteView.setUint32(8, 0, Endian.big);
-
-  // Generate a random transaction ID (4 bytes)
-  final random = Random.secure();
-  byteView.setUint32(12, random.nextInt(1 << 32), Endian.big);
-
+  ByteData.sublistView(buffer)
+    ..setUint64(0, udpProtocolId)
+    ..setUint32(8, 0)
+    ..setUint32(12, transactionId);
   return buffer;
 }
 
+/// UDP announce request (BEP 15), 98 bytes.
 Uint8List buildAnnounceRequest({
   required int connId,
+  required int transactionId,
   required TorrentContent torrent,
-  int port = 6881,
+  required AnnounceParams params,
+  int key = 0,
 }) {
-  port = port > 0 ? port : 6881;
-
   final buffer = Uint8List(98);
-  final byteView = ByteData.sublistView(buffer);
+  final view = ByteData.sublistView(buffer);
 
-  byteView.setUint64(0, connId, Endian.big);
-  byteView.setUint32(8, 1); //action
-
-  final rand = Random.secure();
-
-  for (int i = 12; i < 16; i++) {
-    buffer[i] = rand.nextInt(256); //transaction id
-  }
-
-  buffer.setRange(16, 36, torrent.infoHash); //info hash
-
-  buffer.setRange(36, 56, TorrentiaUtils.generateId()); //peer id
-
-  buffer.setRange(56, 64, Uint16List(8)); //downloaded
-
-  byteView.setUint32(64, torrent.size); //left
-
-  buffer.setRange(72, 80, Uint8List(8)); //uploaded
-
-  byteView.setUint32(80, 0); //event
-
-  byteView.setUint32(84, 0); //ip
-
-  for (int i = 88; i < 92; i++) {
-    buffer[i] = rand.nextInt(256); //key
-  }
-
-  byteView.setInt32(92, -1); //num want
-
-  byteView.setUint16(96, port);
-
+  view.setUint64(0, connId);
+  view.setUint32(8, 1); // action: announce
+  view.setUint32(12, transactionId);
+  buffer.setRange(16, 36, torrent.infoHash);
+  buffer.setRange(36, 56, params.effectivePeerId);
+  view.setUint64(56, params.downloaded);
+  view.setUint64(64, params.left);
+  view.setUint64(72, params.uploaded);
+  view.setUint32(80, params.event.udpCode);
+  view.setUint32(84, 0); // IP: let the tracker use the packet's source address
+  view.setUint32(88, key);
+  view.setInt32(92, params.numWant);
+  view.setUint16(96, params.port);
   return buffer;
 }
 
+/// Builds the HTTP(S) announce URL, keeping any query already on [trackerUrl]
+/// (private trackers put passkeys there).
 Uri buildHttpConnectionRequest({
   required String trackerUrl,
   required TorrentContent torrent,
-  int port = 6881,
+  required AnnounceParams params,
 }) {
-  final infoHash = torrent.infoHash;
-  final peerId = TorrentiaUtils.generateId();
-  final port = 6881;
-  final uploaded = 0;
-  final downloaded = 0;
-  final left = torrent.size;
-
-  final String encodedInfoHash = _urlEncodeInfoHash(infoHash);
-
-  // Manually construct the query string
-  final String query = [
-    'peer_id=${_urlEncodeInfoHash(peerId)}',
-    'port=$port',
-    'uploaded=$uploaded',
-    'downloaded=$downloaded',
-    'left=$left',
+  final base = Uri.parse(trackerUrl);
+  final query = [
+    if (base.query.isNotEmpty) base.query,
+    'info_hash=${_percentEncodeBytes(torrent.infoHash)}',
+    'peer_id=${_percentEncodeBytes(params.effectivePeerId)}',
+    'port=${params.port}',
+    'uploaded=${params.uploaded}',
+    'downloaded=${params.downloaded}',
+    'left=${params.left}',
     'compact=1',
-    'event=started',
-    'info_hash=$encodedInfoHash',
+    'numwant=${params.numWant}',
+    if (params.event.httpName != null) 'event=${params.event.httpName}',
   ].join('&');
 
-  try {
-    final Uri baseUri = Uri.parse(trackerUrl);
-    final Uri finalUri = Uri(
-      scheme: baseUri.scheme,
-      host: baseUri.host,
-      port: baseUri.port,
-      path: baseUri.path,
-      query: query,
-    );
-
-    print("Built Uri: $finalUri");
-    return finalUri;
-  } catch (e) {
-    print(e);
-    throw Exception("Failed to build URI");
-  }
+  return base.replace(query: query);
 }
 
-String _urlEncodeInfoHash(Uint8List infoHash) {
-  return infoHash.map((byte) => '%${byte.toRadixString(16).padLeft(2, '0')}').join();
-}
+String _percentEncodeBytes(Uint8List bytes) =>
+    bytes.map((b) => '%${b.toRadixString(16).padLeft(2, '0')}').join();

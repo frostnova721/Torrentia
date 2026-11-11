@@ -1,103 +1,132 @@
-// ignore_for_file: public_member_api_docs, sort_constructors_first
+import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:b_encode_decode/b_encode_decode.dart';
+import 'package:torrentia/bencode.dart';
 
-AnnounceResponse parseAnnounceStringResponse(Uint8List resp) {
-  final Map<String, dynamic> decoded = decode(resp);
-  print(decoded);
+class TrackerException implements Exception {
+  final String message;
+  TrackerException(this.message);
 
-  return AnnounceResponse(
-    action: 0,
-    transactionId: 0,
-    leechers: decoded['incomplete'] ?? 0,
-    seeders: decoded['complete'] ?? 0,
-    peers: _parsePeers(decoded['peers'] as Uint8List),
-  );
+  @override
+  String toString() => 'TrackerException: $message';
 }
 
-AnnounceResponse parseAnnounceBufferResponse(Uint8List resp) {
-  final ByteData byteData = ByteData.sublistView(resp);
-
-  // Make sure we have at least 20 bytes (minimum size for header)
-  if (resp.length < 20) {
-    throw Exception('Response too short: ${resp.length} bytes');
+/// Parses a bencoded HTTP tracker response.
+AnnounceResponse parseHttpAnnounceResponse(Uint8List body) {
+  final dynamic decoded;
+  try {
+    decoded = bdecode(body).value;
+  } on BencodeException catch (e) {
+    throw TrackerException('Malformed response: ${e.message}');
   }
+  if (decoded is! Map<String, dynamic>) throw TrackerException('Response is not a dictionary');
 
-  final action = byteData.getInt32(0, Endian.big); // Changed to getInt32
-  final transactionId = byteData.getInt32(4, Endian.big);
-  final leechers = byteData.getInt32(8, Endian.big);
-  final seeders = byteData.getInt32(12, Endian.big);
+  final failure = decoded['failure reason'];
+  if (failure != null) throw TrackerException(_text(failure));
 
-  // Add validation
-  if (action != 0 && action != 1) {
-    throw Exception('Invalid action value: $action');
+  final peers = <Peer>[];
+  final rawPeers = decoded['peers'];
+  if (rawPeers is Uint8List) {
+    peers.addAll(parseCompactPeers(rawPeers));
+  } else if (rawPeers is List) {
+    // Non-compact form: list of {ip, port, peer id} dictionaries.
+    for (final p in rawPeers) {
+      if (p is Map && p['ip'] != null && p['port'] is int) {
+        peers.add(Peer(ip: _text(p['ip']), port: p['port'] as int));
+      }
+    }
   }
-
-  // The remaining part of the response is the peers data
-  final peersData = resp.sublist(20);
-  final peers = _parsePeers(peersData);
+  final rawPeers6 = decoded['peers6'];
+  if (rawPeers6 is Uint8List) peers.addAll(parseCompactPeers6(rawPeers6));
 
   return AnnounceResponse(
-    action: action,
-    transactionId: transactionId,
-    leechers: leechers,
-    seeders: seeders,
+    interval: (decoded['min interval'] ?? decoded['interval'] ?? 1800) as int,
+    leechers: (decoded['incomplete'] ?? 0) as int,
+    seeders: (decoded['complete'] ?? 0) as int,
     peers: peers,
+    warning: decoded['warning message'] == null ? null : _text(decoded['warning message']),
   );
 }
 
-List<Peer> _parsePeers(Uint8List peersData) {
-  final List<Peer> peers = [];
-  for (int i = 0; i < peersData.length; i += 6) {
-    if (i + 6 > peersData.length) break; // Prevent overflow
-
-    final ipBytes = peersData.sublist(i, i + 4);
-    final portBytes = peersData.sublist(i + 4, i + 6);
-
-    // Proper IP address formatting
-    final ip = ipBytes.map((b) => b.toString()).join('.');
-    final portRaw1 = portBytes[0];
-    final portRaw2 = portBytes[1];
-    final port = ((portRaw1 & 0xFF) << 8) | (portRaw2 & 0xFF);
-
-    peers.add(Peer(ip: ip, port: port));
-  }
-  return peers;
-}
-
-ConnectionResponse parseConnResponse(Uint8List response) {
-  if (response.length < 16) {
-    throw Exception("Expected Length Of 16 Bytes. Recieved ${response.length} Bytes");
-  }
-
+/// Parses a UDP connect response (BEP 15) and checks it answers our request.
+ConnectionResponse parseConnResponse(Uint8List response, {required int transactionId}) {
+  _checkUdpHeader(response, 0, transactionId, minLength: 16);
   final bytes = ByteData.sublistView(response);
   return ConnectionResponse(
-    action: bytes.getUint32(0),
-    transactionId: bytes.getUint32(4),
+    transactionId: transactionId,
     connectionId: bytes.getUint64(8, Endian.big),
   );
 }
 
+/// Parses a UDP announce response (BEP 15).
+///
+/// Layout: action(4) transaction_id(4) interval(4) leechers(4) seeders(4) peers(6*n)
+AnnounceResponse parseUdpAnnounceResponse(Uint8List response, {required int transactionId}) {
+  _checkUdpHeader(response, 1, transactionId, minLength: 20);
+  final bytes = ByteData.sublistView(response);
+  return AnnounceResponse(
+    interval: bytes.getUint32(8),
+    leechers: bytes.getUint32(12),
+    seeders: bytes.getUint32(16),
+    peers: parseCompactPeers(Uint8List.sublistView(response, 20)),
+  );
+}
+
+void _checkUdpHeader(Uint8List response, int expectedAction, int transactionId, {required int minLength}) {
+  if (response.length < 8) throw TrackerException('Response too short: ${response.length} bytes');
+  final bytes = ByteData.sublistView(response);
+  final action = bytes.getUint32(0);
+  final tid = bytes.getUint32(4);
+  if (tid != transactionId) throw TrackerException('Transaction id mismatch');
+  if (action == 3) throw TrackerException(_text(Uint8List.sublistView(response, 8)));
+  if (action != expectedAction) throw TrackerException('Unexpected action $action (wanted $expectedAction)');
+  if (response.length < minLength) throw TrackerException('Response too short: ${response.length} bytes');
+}
+
+/// Compact IPv4 peer list: 4 bytes IP + 2 bytes port, big-endian.
+List<Peer> parseCompactPeers(Uint8List data) {
+  final peers = <Peer>[];
+  for (var i = 0; i + 6 <= data.length; i += 6) {
+    final ip = '${data[i]}.${data[i + 1]}.${data[i + 2]}.${data[i + 3]}';
+    final port = (data[i + 4] << 8) | data[i + 5];
+    if (port != 0) peers.add(Peer(ip: ip, port: port));
+  }
+  return peers;
+}
+
+/// Compact IPv6 peer list: 16 bytes IP + 2 bytes port.
+List<Peer> parseCompactPeers6(Uint8List data) {
+  final peers = <Peer>[];
+  for (var i = 0; i + 18 <= data.length; i += 18) {
+    final ip = InternetAddress.fromRawAddress(Uint8List.fromList(data.sublist(i, i + 16))).address;
+    final port = (data[i + 16] << 8) | data[i + 17];
+    if (port != 0) peers.add(Peer(ip: ip, port: port));
+  }
+  return peers;
+}
+
+String _text(dynamic v) => v is Uint8List ? utf8.decode(v, allowMalformed: true) : v.toString();
+
 class AnnounceResponse {
-  final int action;
-  final int transactionId;
+  /// Seconds to wait before re-announcing.
+  final int interval;
   final int leechers;
   final int seeders;
   final List<Peer> peers;
+  final String? warning;
 
   AnnounceResponse({
-    required this.action,
-    required this.transactionId,
+    required this.interval,
     required this.leechers,
     required this.seeders,
     required this.peers,
+    this.warning,
   });
 
   @override
-  String toString() {
-    return 'AnnounceResponse(action: $action, transactionId: $transactionId, leechers: $leechers, seeders: $seeders, peers: $peers)';
-  }
+  String toString() =>
+      'AnnounceResponse(interval: $interval, leechers: $leechers, seeders: $seeders, peers: ${peers.length})';
 }
 
 class Peer {
@@ -106,22 +135,24 @@ class Peer {
 
   Peer({required this.ip, required this.port});
 
+  String get key => '$ip:$port';
+
   @override
-  String toString() => 'Peer(ip: $ip, port: $port)';
+  bool operator ==(Object other) => other is Peer && other.ip == ip && other.port == port;
+
+  @override
+  int get hashCode => Object.hash(ip, port);
+
+  @override
+  String toString() => ip.contains(':') ? '[$ip]:$port' : '$ip:$port';
 }
 
 class ConnectionResponse {
-  final int action;
   final int transactionId;
   final int connectionId;
 
-  ConnectionResponse({
-    required this.action,
-    required this.transactionId,
-    required this.connectionId,
-  });
+  ConnectionResponse({required this.transactionId, required this.connectionId});
 
   @override
-  String toString() =>
-      'ConnectionResponse(action: $action, transactionId: $transactionId, connectionId: $connectionId)';
+  String toString() => 'ConnectionResponse(transactionId: $transactionId, connectionId: $connectionId)';
 }

@@ -1,158 +1,153 @@
-import 'dart:convert';
 import 'dart:typed_data';
 
-import 'package:torrentia/reader.dart';
-import 'package:torrentia/utils.dart';
+/// Peer wire protocol message ids (BEP 3).
+abstract final class MessageId {
+  static const keepAlive = -1;
+  static const choke = 0;
+  static const unchoke = 1;
+  static const interested = 2;
+  static const notInterested = 3;
+  static const have = 4;
+  static const bitfield = 5;
+  static const request = 6;
+  static const piece = 7;
+  static const cancel = 8;
+  static const port = 9;
+  static const extended = 20;
+}
+
+const protocolString = 'BitTorrent protocol';
+const handshakeLength = 68;
+
+class Handshake {
+  final Uint8List reserved;
+  final Uint8List infoHash;
+  final Uint8List peerId;
+
+  Handshake({required this.reserved, required this.infoHash, required this.peerId});
+
+  /// Parses a 68-byte handshake, or returns null if it isn't one.
+  static Handshake? parse(Uint8List data) {
+    if (data.length < handshakeLength || data[0] != 19) return null;
+    if (String.fromCharCodes(data.sublist(1, 20)) != protocolString) return null;
+    return Handshake(
+      reserved: Uint8List.fromList(data.sublist(20, 28)),
+      infoHash: Uint8List.fromList(data.sublist(28, 48)),
+      peerId: Uint8List.fromList(data.sublist(48, 68)),
+    );
+  }
+}
 
 class Messages {
-  static Uint8List buildHandShake(TorrentContent torrent) {
-    final handshake = BytesBuilder();
-  handshake.addByte(19); // Protocol length
-  handshake.add(utf8.encode("BitTorrent protocol"));
-  handshake.add(Uint8List(8)); // Reserved bytes
-  handshake.add(torrent.infoHash);
-  handshake.add(TorrentiaUtils.generateId());
-
-  return handshake.toBytes();
+  static Uint8List buildHandShake(Uint8List infoHash, Uint8List peerId) {
+    final b = BytesBuilder(copy: false)
+      ..addByte(19)
+      ..add(protocolString.codeUnits)
+      ..add(Uint8List(8)) // reserved: no extensions
+      ..add(infoHash)
+      ..add(peerId);
+    return b.toBytes();
   }
 
-  static Uint8List buildUnchoke() {
+  static Uint8List buildKeepAlive() => Uint8List(4);
+
+  static Uint8List _simple(int id) {
     final buffer = Uint8List(5);
-    final byteView = ByteData.sublistView(buffer);
-
-    byteView.setUint32(0, 1);
-    byteView.setUint8(4, 1);
-
+    ByteData.sublistView(buffer)
+      ..setUint32(0, 1)
+      ..setUint8(4, id);
     return buffer;
   }
 
-  static Uint8List buildInterested() {
-    final buffer = Uint8List(5);
-    final bv = ByteData.sublistView(buffer);
+  static Uint8List buildChoke() => _simple(MessageId.choke);
+  static Uint8List buildUnchoke() => _simple(MessageId.unchoke);
+  static Uint8List buildInterested() => _simple(MessageId.interested);
+  static Uint8List buildNotInterested() => _simple(MessageId.notInterested);
 
-    bv.setUint32(0, 1);
-    bv.setUint8(4, 2);
-
-    return buffer;
-  }
-
-  static Uint8List buildUnInterested() {
-    final buffer = Uint8List(5);
-    final bv = ByteData.sublistView(buffer);
-
-    bv.setUint32(0, 1);
-    bv.setUint8(4, 3);
-
-    return buffer;
-  }
-
-  static Uint8List buildHave(Uint8List payload) {
+  static Uint8List buildHave(int pieceIndex) {
     final buffer = Uint8List(9);
-    final bv = ByteData.sublistView(buffer);
-
-    bv.setUint32(0, 5);
-    bv.setUint8(4, 4);
-    buffer.setRange(5, payload.length + 5, payload);
-
+    ByteData.sublistView(buffer)
+      ..setUint32(0, 5)
+      ..setUint8(4, MessageId.have)
+      ..setUint32(5, pieceIndex);
     return buffer;
   }
 
   static Uint8List buildBitField(Uint8List bitfield) {
-    final buffer = Uint8List(14);
-    final bv = ByteData.sublistView(buffer);
-
-    buffer.setRange(0, 4, bitfield);
-
-    bv.setUint8(4, 5);
-    buffer.setRange(5, bitfield.length + 5, bitfield);
-
+    final buffer = Uint8List(5 + bitfield.length);
+    ByteData.sublistView(buffer)
+      ..setUint32(0, 1 + bitfield.length)
+      ..setUint8(4, MessageId.bitfield);
+    buffer.setRange(5, buffer.length, bitfield);
     return buffer;
   }
 
-  static Uint8List buildRequest(int index, int begin, int length) {
+  static Uint8List buildRequest(int index, int begin, int length) =>
+      _triple(MessageId.request, index, begin, length);
+
+  static Uint8List buildCancel(int index, int begin, int length) =>
+      _triple(MessageId.cancel, index, begin, length);
+
+  static Uint8List _triple(int id, int index, int begin, int length) {
     final buffer = Uint8List(17);
-    final bv = ByteData.sublistView(buffer);
-
-    bv.setUint32(0, 13);
-    bv.setUint8(4, 6);
-    bv.setUint32(5, index);
-    bv.setUint32(9, begin);
-    bv.setUint32(13, length);
-
+    ByteData.sublistView(buffer)
+      ..setUint32(0, 13)
+      ..setUint8(4, id)
+      ..setUint32(5, index)
+      ..setUint32(9, begin)
+      ..setUint32(13, length);
     return buffer;
   }
 
   static Uint8List buildPiece(int index, int begin, Uint8List block) {
-    final buffer = Uint8List(block.length + 13);
-    final bv = ByteData.sublistView(buffer);
-
-    bv.setUint32(0, block.length + 9); //len
-
-    bv.setUint8(4, 7); //id
-
-    bv.setUint32(5, index); //index of piece
-
-    bv.setUint32(9, begin);
-
-    buffer.setRange(13, block.length + 13, block);
-
+    final buffer = Uint8List(13 + block.length);
+    ByteData.sublistView(buffer)
+      ..setUint32(0, 9 + block.length)
+      ..setUint8(4, MessageId.piece)
+      ..setUint32(5, index)
+      ..setUint32(9, begin);
+    buffer.setRange(13, buffer.length, block);
     return buffer;
   }
 
-  static Uint8List buildCancel(int index, int begin, int length) {
-    final buffer = Uint8List(17);
-    final bv = ByteData.sublistView(buffer);
-
-    bv.setUint32(0, 13); //length
-    bv.setUint8(4, 8); //id
-    bv.setUint32(5, index); //piece index
-    bv.setUint32(9, begin); //begin
-    bv.setUint32(13, length); //length
-
-    return buffer;
-  }
-
-  static Uint8List buildPort(Uint8List payload) {
+  static Uint8List buildPort(int port) {
     final buffer = Uint8List(7);
-    final bv = ByteData.sublistView(buffer);
-
-    bv.setUint32(0, 3);
-    bv.setUint8(4, 9); //id
-
-    buffer.setRange(5, 7, payload); //listen port
-
+    ByteData.sublistView(buffer)
+      ..setUint32(0, 3)
+      ..setUint8(4, MessageId.port)
+      ..setUint16(5, port);
     return buffer;
   }
 
-  static ResponseMessage? parseMessage(Uint8List message) {
-    final bv = ByteData.sublistView(message);
-    final id = message.length > 4 ? bv.getInt8(4) : null;
-    Uint8List? payload = message.length > 5 ? message.sublist(5) : null;
-    if (payload == null || id == null) return null;
-    Map<String, dynamic>? payloadmap;
-    if (id == 6 || id == 7 || id == 8) {
-      final rest = payload.sublist(8);
-      final payloadBv = ByteData.sublistView(payload);
-      payloadmap = {
-        'index': payloadBv.getInt32(0),
-        'begin': payloadBv.getInt32(4),
-      };
-
-      payloadmap[id == 7 ? 'block' : 'length'] = rest;
-    }
-
-    return ResponseMessage(size: bv.getInt32(0), id: id, payload: payloadmap ?? payload);
+  /// Parses one length-prefixed frame (including its 4-byte length).
+  static PeerMessage parseMessage(Uint8List frame) {
+    if (frame.length < 4) throw const FormatException('Frame shorter than its length prefix');
+    final view = ByteData.sublistView(frame);
+    final length = view.getUint32(0);
+    if (frame.length != length + 4) throw FormatException('Frame length mismatch: $length vs ${frame.length - 4}');
+    if (length == 0) return PeerMessage(MessageId.keepAlive, Uint8List(0));
+    return PeerMessage(frame[4], Uint8List.sublistView(frame, 5));
   }
 }
 
-class ResponseMessage {
-  final int size;
+class PeerMessage {
   final int id;
-  final dynamic payload;
+  final Uint8List payload;
 
-  ResponseMessage({
-    required this.size,
-    required this.id,
-    required this.payload,
-  });
+  PeerMessage(this.id, this.payload);
+
+  ByteData get _view => ByteData.sublistView(payload);
+
+  /// For `have`.
+  int get haveIndex => _view.getUint32(0);
+
+  /// For `request` / `cancel`: (index, begin, length).
+  (int, int, int) get requestFields => (_view.getUint32(0), _view.getUint32(4), _view.getUint32(8));
+
+  /// For `piece`: (index, begin, block).
+  (int, int, Uint8List) get pieceFields =>
+      (_view.getUint32(0), _view.getUint32(4), Uint8List.sublistView(payload, 8));
+
+  @override
+  String toString() => 'PeerMessage(id: $id, payload: ${payload.length} bytes)';
 }
