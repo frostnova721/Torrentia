@@ -49,3 +49,13 @@ dart run bin/torrentia.dart  path/to/torrent-file.torrent --download
 ## Test torrent
 
 `assets/big-buck-bunny.torrent` is the torrent for *Big Buck Bunny* (© Blender Foundation, CC BY 3.0).
+
+## License
+
+Copyright (C) 2026 FrostNova
+
+Torrentia is licensed under the [GNU Affero General Public License v3.0](LICENSE) (AGPL-3.0-only).
+
+You are free to use, modify, and share it, but if you distribute a modified version **or run it as a network service**, you must make your source code available under the same license.
+
+The test torrent in `assets/` is a third-party work and keeps its own license (see above).
